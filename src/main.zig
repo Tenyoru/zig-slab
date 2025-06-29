@@ -72,7 +72,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
         }
 
         inline fn checkOutOfRage(self: *Self, index: usize) !void {
-            if (cfg.safe and index >= self.data.len) return SlabError.OutOfRange;
+            if (cfg.safe and index >= self.size) return SlabError.OutOfRange;
         }
 
         pub fn insertAt(self: *Self, index: usize, value: T) SlabError!void {
