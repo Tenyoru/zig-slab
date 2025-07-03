@@ -123,7 +123,6 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
 
         pub fn insert(self: *Self, value: T) !usize {
             const index: usize = try self.findFreeSlot();
-            if (self.data()[index] != null) return SlabError.SlotOccupied;
             self.data()[index] = value;
             return index;
         }
