@@ -17,6 +17,11 @@ const SlabConfig = struct {
         static,
     },
     size: comptime_int = 0,
+    grow: struct {
+        enable: bool = true,
+        threshold: comptime_float = 0.7,
+        factor: comptime_float = 1.5,
+    } = .{},
 };
 
 pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
