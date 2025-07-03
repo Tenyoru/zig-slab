@@ -15,7 +15,7 @@ const SlabConfig = struct {
     storage: enum {
         dynamic,
         static,
-    },
+    } = .dynamic,
     size: comptime_int = 0,
     grow: struct {
         enable: bool = true,
