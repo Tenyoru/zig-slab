@@ -93,6 +93,12 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             return &maybe;
         }
 
+        pub fn get(self: *Self, index: usize) SlabError!T {
+            try self.checkOutOfRage(index);
+
+            return self.data[index] orelse SlabError.EmptySlot;
+        }
+
         inline fn findFreeSlot(self: *Self) !usize {
             for (self.data, 0..) |bucket, i| {
                 if (bucket == null)
