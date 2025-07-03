@@ -114,8 +114,8 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
         }
 
         pub fn findFreeSlot(self: *Self) !usize {
-            for (self.data(), 0..) |bucket, i| {
-                if (bucket == null)
+            for (self.data(), 0..) |slot, i| {
+                if (slot == null)
                     return i;
             }
             return SlabError.SlotsAreFull;
