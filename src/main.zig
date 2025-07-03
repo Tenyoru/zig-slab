@@ -86,7 +86,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             self.data[index] = null;
         }
 
-        pub fn get(self: *Self, index: usize) SlabError!*const T {
+        pub fn get_ptr(self: *Self, index: usize) SlabError!*const T {
             try self.checkOutOfRage(index);
 
             const maybe = self.data[index] orelse return SlabError.EmptySlot;
@@ -113,7 +113,7 @@ test "init static" {
     const Slab = createSlab(u32, .{ .storage = .static, .size = 3000, .safe = false });
     var slab = try Slab.init(null);
     try slab.insertAt(2500, 25);
-    const value = @constCast(try slab.get(2500));
+    const value = @constCast(try slab.get_ptr(2500));
     try expectEqual(value.*, 25);
 }
 
@@ -122,6 +122,6 @@ test "init dynamic" {
     var slab = try Slab.init(std.testing.allocator);
     slab.deinit();
     try slab.insertAt(2500, 40);
-    const value = try slab.get(2500);
+    const value = try slab.get_ptr(2500);
     try expectEqual(value.*, 40);
 }
