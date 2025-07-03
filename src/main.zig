@@ -53,6 +53,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                     if (comptime cfg.size <= 0)
                         @compileError("Invalid slab size: cfg.size must be a positive integer greater than zero.");
                     return Self{
+                        .buckets_size = undefined,
                         .allocator = undefined,
                         .data = @splat(null),
                         .size = cfg.size,
