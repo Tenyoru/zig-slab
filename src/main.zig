@@ -26,7 +26,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             .dynamic => struct {
                 data: []?T,
                 allocator: std.mem.Allocator,
-                buckets_size: usize,
+                occupied_count: usize,
             },
             .static => struct {
                 data: [cfg.size]?T,
@@ -49,7 +49,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                         .backend = .{
                             .allocator = alloc,
                             .data = slots,
-                            .buckets_size = 0,
+                            .occupied_count = 0,
                         },
                     };
                 },
