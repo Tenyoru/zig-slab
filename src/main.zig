@@ -46,7 +46,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                         @compileError("Invalid slab size: cfg.size must be a positive integer greater than zero.");
 
                     const default_size = 128;
-                    const size = cfg.size orelse default_size;
+                    const size = if (cfg.size == 0) default_size else cfg.size;
 
                     const slots = try alloc.alloc(?T, size);
                     @memset(slots, null);
@@ -80,7 +80,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
         }
 
         //copy
-        inline fn at(self: *Self, index: usize) ?T {
+        pub inline fn at(self: *Self, index: usize) ?T {
             return self.data()[index];
         }
 
@@ -92,12 +92,6 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
 
         inline fn checkOutOfRage(self: *Self, index: usize) !void {
             if (cfg.safe and index >= self.len()) return SlabError.OutOfRange;
-        }
-
-        pub fn insertAt(self: *Self, index: usize, value: T) SlabError!void {
-            try self.checkOutOfRage(index);
-            if (self.data()[index] != null) return SlabError.SlotOccupied;
-            self.data()[index] = value;
         }
 
         pub fn remove(self: *Self, index: usize) SlabError!void {
@@ -126,10 +120,35 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             return SlabError.SlotsAreFull;
         }
 
+        pub fn insertAt(self: *Self, index: usize, value: T) !void {
+            try self.maybeGrow();
+            try self.checkOutOfRage(index);
+            if (self.data()[index] != null) return SlabError.SlotOccupied;
+            if (comptime cfg.grow.enable and cfg.storage == .dynamic) {
+                self.backend.occupied_count = self.backend.occupied_count + 1;
+            }
+            self.data()[index] = value;
+        }
+
         pub fn insert(self: *Self, value: T) !usize {
+            try self.maybeGrow();
             const index: usize = try self.findFreeSlot();
             self.data()[index] = value;
             return index;
+        }
+
+        fn maybeGrow(self: *Self) !void {
+            if (comptime cfg.grow.enable == false or cfg.storage == .static) return;
+
+            const usage: f64 = @as(f64, @floatFromInt(self.backend.occupied_count)) / @as(f64, @floatFromInt(self.len()));
+            if (usage < cfg.grow.threshold) return;
+
+            const old_data = self.data();
+            const new_len: usize = @intFromFloat(std.math.ceil(@as(f64, @floatFromInt(old_data.len)) * cfg.grow.factor));
+            const new_data = try self.backend.allocator.alloc(?T, new_len);
+            @memcpy(new_data[0..old_data.len], old_data[0..]);
+            self.backend.allocator.free(old_data);
+            self.backend.data = new_data;
         }
     };
 }
@@ -149,4 +168,15 @@ test "init dynamic" {
     try slab.insertAt(2500, 40);
     const value = try slab.get(2500);
     try expectEqual(value, 40);
+}
+
+test "grow" {
+    const Slab = createSlab(usize, .{ .storage = .dynamic, .size = 5, .safe = false, .grow = .{ .enable = true } });
+    var slab = try Slab.init(std.testing.allocator);
+    defer slab.deinit();
+
+    for (0..5) |i| {
+        try slab.insertAt(i, i);
+    }
+    try expect(slab.len() > 5);
 }
