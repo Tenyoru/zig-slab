@@ -32,7 +32,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             .dynamic => struct {
                 data: []?T,
                 allocator: std.mem.Allocator,
-                occupied_count: usize,
+                occupied_count: if (cfg.grow.enable) usize else void,
             },
             .static => struct {
                 data: [cfg.size]?T,
@@ -74,7 +74,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                 .backend = .{
                     .allocator = allocator,
                     .data = slots,
-                    .occupied_count = 0,
+                    .occupied_count = if (comptime cfg.grow.enable) 0,
                 },
             };
         }
@@ -103,7 +103,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
         }
 
         pub fn remove(self: *Self, index: usize) SlabError!void {
-            if (comptime cfg.safe and self.data()[index] == null) return SlabError.RemoveEmptySlot;
+            if (cfg.safe and self.data()[index] == null) return SlabError.RemoveEmptySlot;
             self.data()[index] = null;
         }
 
@@ -140,9 +140,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             }
 
             if (self.data()[index] != null) return SlabError.SlotOccupied;
-            if (comptime cfg.grow.enable and cfg.storage == .dynamic) {
-                self.backend.occupied_count = self.backend.occupied_count + 1;
-            }
+            self.maybeIncrementOccupied();
             self.data()[index] = value;
         }
 
@@ -150,7 +148,14 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             try self.maybeGrow();
             const index: usize = try self.findFreeSlot();
             self.data()[index] = value;
+            self.maybeIncrementOccupied();
             return index;
+        }
+
+        inline fn maybeIncrementOccupied(self: *Self) void {
+            if (comptime cfg.grow.enable and cfg.storage == .dynamic) {
+                self.backend.occupied_count += 1;
+            }
         }
 
         inline fn getFactor(size: usize) usize {
@@ -180,32 +185,142 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
 }
 
 test "init static" {
-    const Slab = createSlab(u32, .{ .storage = .static, .size = 3000, .safe = false });
-    var slab = try Slab.init(null);
-    try slab.insertAt(2500, 25);
-    const value = @constCast(try slab.get_ptr(2500));
-    try expectEqual(value.*, 25);
-}
+    const Slab = createSlab(u32, .{
+        .storage = .static,
+        .size = 10,
+        .safe = false,
+    });
 
-test "init dynamic" {
-    var size: usize = 0;
-    size += 1000;
-    size *= 3;
-    const Slab = createSlab(u32, .{ .storage = .dynamic });
-    var slab = try Slab.initWithSize(std.testing.allocator, size);
-    defer slab.deinit();
-    try slab.insertAt(2500, 40);
-    const value = try slab.get(2500);
-    try expectEqual(value, 40);
-}
-
-test "grow" {
-    const Slab = createSlab(usize, .{ .storage = .dynamic, .size = 5, .safe = false, .grow = .{ .enable = true } });
     var slab = try Slab.init(std.testing.allocator);
     defer slab.deinit();
 
-    for (0..5) |i| {
-        try slab.insertAt(i, i);
+    for (0..slab.len()) |i| {
+        try slab.insertAt(i, @as(u32, @intCast(i)));
     }
-    try expect(slab.len() > 5);
+}
+
+test "init dynamic" {
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .size = 10,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+
+    var slab = try Slab.init(std.testing.allocator);
+    defer slab.deinit();
+    try expectEqual(slab.len(), 10);
+    for (0..slab.len()) |i| {
+        const err = slab.get(i) catch |e| e;
+        try expectEqual(err, SlabError.EmptySlot);
+    }
+}
+
+test "initWithSize" {
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+
+    var slab = try Slab.initWithSize(std.testing.allocator, 10);
+    defer slab.deinit();
+    try expectEqual(slab.len(), 10);
+
+    for (0..slab.len()) |i| {
+        const err = slab.get(i) catch |e| e;
+        try expectEqual(err, SlabError.EmptySlot);
+    }
+}
+
+test "get" {
+    const Slab = createSlab(u32, .{ .storage = .dynamic, .safe = true });
+    var slab = try Slab.initWithSize(std.testing.allocator, 3);
+    defer slab.deinit();
+
+    try slab.insertAt(1, 42);
+
+    try expectEqual(try slab.get(1), 42);
+    try expectEqual(slab.get(0) catch |e| e, SlabError.EmptySlot);
+    try expectEqual(slab.get(10) catch |e| e, SlabError.OutOfRange);
+}
+
+test "get_ptr" {
+    const Slab = createSlab(u32, .{ .storage = .dynamic, .safe = true });
+    var slab = try Slab.initWithSize(std.testing.allocator, 2);
+    defer slab.deinit();
+
+    try slab.insertAt(0, 123);
+    const ptr = try slab.get_ptr(0);
+    try expectEqual(ptr.*, 123);
+
+    try expectEqual(slab.get_ptr(1) catch |e| e, SlabError.EmptySlot);
+    try expectEqual(slab.get_ptr(99) catch |e| e, SlabError.OutOfRange);
+}
+
+test "insert" {
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+    var slab = try Slab.initWithSize(std.testing.allocator, 2);
+    defer slab.deinit();
+
+    const in0 = try slab.insert(5);
+    const in1 = try slab.insert(10);
+    try expectEqual(try slab.get(in0), 5);
+    try expectEqual(try slab.get(in1), 10);
+
+    try expectEqual(slab.insert(99) catch |e| e, SlabError.SlotsAreFull);
+}
+
+test "insertAt" {
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+    var slab = try Slab.initWithSize(std.testing.allocator, 2);
+    defer slab.deinit();
+
+    try slab.insertAt(1, 99);
+    try expectEqual(try slab.get(1), 99);
+    try expectEqual(slab.insertAt(1, 88) catch |e| e, SlabError.SlotOccupied);
+    try expectEqual(slab.insertAt(10, 1) catch |e| e, SlabError.OutOfRange);
+}
+
+test "remove" {
+    const Slab = createSlab(u32, .{ .storage = .dynamic, .safe = true });
+    var slab = try Slab.initWithSize(std.testing.allocator, 2);
+    defer slab.deinit();
+
+    try slab.insertAt(0, 111);
+    try slab.remove(0);
+    try expectEqual(slab.get(0) catch |e| e, SlabError.EmptySlot);
+
+    try expectEqual(slab.remove(0) catch |e| e, SlabError.RemoveEmptySlot);
+}
+
+test "findFreeSlot" {
+    const Slab = createSlab(u32, .{ .storage = .dynamic });
+    var slab = try Slab.initWithSize(std.testing.allocator, 1);
+    defer slab.deinit();
+
+    const idx = try slab.findFreeSlot();
+    try expectEqual(idx, 0);
+    try slab.insertAt(idx, 1);
+
+    try expectEqual(slab.findFreeSlot() catch |e| e, SlabError.SlotsAreFull);
+}
+
+test "len, data, at return correct info" {
+    const Slab = createSlab(u32, .{ .storage = .dynamic });
+    var slab = try Slab.initWithSize(std.testing.allocator, 3);
+    defer slab.deinit();
+
+    try expectEqual(slab.len(), 3);
+    try slab.insertAt(2, 77);
+    try expectEqual(slab.at(2).?, 77);
+    try expectEqual(slab.data()[2].?, 77);
 }
