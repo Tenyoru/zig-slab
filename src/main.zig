@@ -8,6 +8,7 @@ const SlabError = error{
     EmptySlot,
     SlotsAreFull,
     RemoveEmptySlot,
+    GrowNotNeeded,
 };
 
 const SlabConfig = struct {
@@ -48,27 +49,34 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                     const default_size = 128;
                     const size = if (comptime cfg.size == 0) default_size else cfg.size;
 
-                    const slots = try alloc.alloc(?T, size);
-                    @memset(slots, null);
-                    return Self{
-                        .backend = .{
-                            .allocator = alloc,
-                            .data = slots,
-                            .occupied_count = 0,
-                        },
-                    };
+                    return Self.initWithSize(alloc, size);
                 },
                 .static => {
                     if (comptime cfg.size <= 0)
                         @compileError("Invalid slab size: cfg.size must be a positive integer greater than zero.");
                     return Self{
-                        // ..data = @splat(null),
                         .backend = .{
                             .data = @splat(null),
                         },
                     };
                 },
             }
+        }
+
+        pub fn initWithSize(allocator: std.mem.Allocator, size: usize) !Self {
+            if (comptime cfg.storage == .static) {
+                @panic("Slab initialization failed: 's_init' requires dynamic storage. Set 'SlabConfig.storage = .dynamic'.");
+            }
+
+            const slots = try allocator.alloc(?T, size);
+            @memset(slots, null);
+            return Self{
+                .backend = .{
+                    .allocator = allocator,
+                    .data = slots,
+                    .occupied_count = 0,
+                },
+            };
         }
 
         pub inline fn len(self: *Self) usize {
@@ -121,8 +129,16 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
         }
 
         pub fn insertAt(self: *Self, index: usize, value: T) !void {
-            try self.maybeGrow();
-            try self.checkOutOfRage(index);
+            if (comptime cfg.grow.enable and cfg.storage == .dynamic) {
+                if (self.len() < index) {
+                    try self.grow(getFactor(index));
+                } else {
+                    try self.maybeGrow();
+                }
+            } else {
+                try self.checkOutOfRage(index);
+            }
+
             if (self.data()[index] != null) return SlabError.SlotOccupied;
             if (comptime cfg.grow.enable and cfg.storage == .dynamic) {
                 self.backend.occupied_count = self.backend.occupied_count + 1;
@@ -137,16 +153,26 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
             return index;
         }
 
+        inline fn getFactor(size: usize) usize {
+            return @intFromFloat(std.math.ceil(@as(f64, @floatFromInt(size)) * cfg.grow.factor));
+        }
+
         fn maybeGrow(self: *Self) !void {
             if (comptime cfg.grow.enable == false or cfg.storage == .static) return;
 
             const usage: f64 = @as(f64, @floatFromInt(self.backend.occupied_count)) / @as(f64, @floatFromInt(self.len()));
             if (usage < cfg.grow.threshold) return;
 
+            try self.grow(getFactor(self.len()));
+        }
+
+        fn grow(self: *Self, size: usize) !void {
+            if (size <= self.len()) return SlabError.GrowNotNeeded;
+
             const old_data = self.data();
-            const new_len: usize = @intFromFloat(std.math.ceil(@as(f64, @floatFromInt(old_data.len)) * cfg.grow.factor));
-            const new_data = try self.backend.allocator.alloc(?T, new_len);
+            const new_data = try self.backend.allocator.alloc(?T, size);
             @memcpy(new_data[0..old_data.len], old_data[0..]);
+            @memset(new_data[old_data.len..], null);
             self.backend.allocator.free(old_data);
             self.backend.data = new_data;
         }
@@ -162,9 +188,12 @@ test "init static" {
 }
 
 test "init dynamic" {
-    const Slab = createSlab(u32, .{ .storage = .static, .size = 3000, .safe = false });
-    var slab = try Slab.init(std.testing.allocator);
-    slab.deinit();
+    var size: usize = 0;
+    size += 1000;
+    size *= 3;
+    const Slab = createSlab(u32, .{ .storage = .dynamic });
+    var slab = try Slab.initWithSize(std.testing.allocator, size);
+    defer slab.deinit();
     try slab.insertAt(2500, 40);
     const value = try slab.get(2500);
     try expectEqual(value, 40);
