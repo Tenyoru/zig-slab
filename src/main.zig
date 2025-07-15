@@ -46,7 +46,7 @@ pub fn createSlab(comptime T: type, comptime cfg: SlabConfig) type {
                         @compileError("Invalid slab size: cfg.size must be a positive integer greater than zero.");
 
                     const default_size = 128;
-                    const size = if (cfg.size == 0) default_size else cfg.size;
+                    const size = if (comptime cfg.size == 0) default_size else cfg.size;
 
                     const slots = try alloc.alloc(?T, size);
                     @memset(slots, null);
