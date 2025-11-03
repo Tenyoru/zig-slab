@@ -324,3 +324,123 @@ test "len, data, at return correct info" {
     try expectEqual(slab.at(2).?, 77);
     try expectEqual(slab.data()[2].?, 77);
 }
+
+test "concurrent insertAt writes unique slots" {
+    const thread_count = 8;
+    const items_per_thread = 32;
+    const total_slots = thread_count * items_per_thread;
+
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+
+    var slab = try Slab.initWithSize(std.testing.allocator, total_slots);
+    defer slab.deinit();
+
+    const ThreadContext = struct {
+        slab: *Slab,
+        start: usize,
+        count: usize,
+        base_value: u32,
+    };
+
+    const Worker = struct {
+        fn run(ctx: *ThreadContext) void {
+            var i: usize = 0;
+            while (i < ctx.count) : (i += 1) {
+                const index = ctx.start + i;
+                const value = ctx.base_value + @as(u32, @intCast(i));
+                ctx.slab.insertAt(index, value) catch |err| {
+                    std.debug.panic("insertAt failed: {s}", .{@errorName(err)});
+                };
+            }
+        }
+    };
+
+    var contexts: [thread_count]ThreadContext = undefined;
+    var threads: [thread_count]std.Thread = undefined;
+
+    for (0..thread_count) |tid| {
+        const start_index = tid * items_per_thread;
+        contexts[tid] = .{
+            .slab = &slab,
+            .start = start_index,
+            .count = items_per_thread,
+            .base_value = @as(u32, @intCast(start_index)),
+        };
+        threads[tid] = try std.Thread.spawn(.{}, Worker.run, .{&contexts[tid]});
+    }
+
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    for (contexts) |ctx| {
+        var i: usize = 0;
+        while (i < ctx.count) : (i += 1) {
+            const index = ctx.start + i;
+            const expected = ctx.base_value + @as(u32, @intCast(i));
+            try expectEqual(expected, try slab.get(index));
+        }
+    }
+}
+
+test "concurrent remove clears slots" {
+    const thread_count = 6;
+    const items_per_thread = 24;
+    const total_slots = thread_count * items_per_thread;
+
+    const Slab = createSlab(u32, .{
+        .storage = .dynamic,
+        .safe = true,
+        .grow = .{ .enable = false },
+    });
+
+    var slab = try Slab.initWithSize(std.testing.allocator, total_slots);
+    defer slab.deinit();
+
+    for (0..total_slots) |i| {
+        try slab.insertAt(i, @as(u32, @intCast(i)));
+    }
+
+    const ThreadContext = struct {
+        slab: *Slab,
+        start: usize,
+        count: usize,
+    };
+
+    const Worker = struct {
+        fn run(ctx: *ThreadContext) void {
+            var i: usize = 0;
+            while (i < ctx.count) : (i += 1) {
+                const index = ctx.start + i;
+                ctx.slab.remove(index) catch |err| {
+                    std.debug.panic("remove failed: {s}", .{@errorName(err)});
+                };
+            }
+        }
+    };
+
+    var contexts: [thread_count]ThreadContext = undefined;
+    var threads: [thread_count]std.Thread = undefined;
+
+    for (0..thread_count) |tid| {
+        const start_index = tid * items_per_thread;
+        contexts[tid] = .{
+            .slab = &slab,
+            .start = start_index,
+            .count = items_per_thread,
+        };
+        threads[tid] = try std.Thread.spawn(.{}, Worker.run, .{&contexts[tid]});
+    }
+
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    for (0..total_slots) |i| {
+        try expectEqual(SlabError.EmptySlot, slab.get(i) catch |err| err);
+    }
+}
