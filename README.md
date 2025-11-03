@@ -1,9 +1,9 @@
 # zig-slab
 
-A configurable slab allocator implemented in Zig. The library provides both
-dynamic and static storage backends and optional growth logic, making it easy to
-hand out stable indices for short-lived objects without paying per-insertion
-allocation costs.
+Generic, type-safe slab allocator for Zig. The library provides both dynamic and
+static storage backends, optional safety checks, and auto-growing capacity,
+making it easy to hand out stable indices for short-lived objects without paying
+per-insertion allocation costs.
 
 ## Features
 - Configurable safety checks (`.safe`) for bounds and usage validation
